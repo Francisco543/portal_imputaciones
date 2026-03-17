@@ -3663,20 +3663,6 @@ function renderEditInput(entryId, day, currentValue) {
   `;
 }
 
-function renderActionButtons(entry, isEditing, tieneObservaciones) {
-  if (isEditing) {
-    return `
-      <button type="button" onclick="cancelEditHours()" title="Cancelar"
-        class="btn btn-sm text-danger border-0">
-        <i data-lucide="x" size="18"></i>
-      </button>
-      <button type="button" onclick="confirmEditHours()" title="Confirmar"
-        class="btn btn-sm text-success border-0">
-        <i data-lucide="check" size="18"></i>
-      </button>
-    `;
-  }
-
   return `
     <button type="button" onclick="openModal('${entry.id}', false)" title="Observaciones"
       class="btn btn-sm border-0 ${tieneObservaciones ? "ip20-observations-btn-active" : "ip20-observations-btn"}">
