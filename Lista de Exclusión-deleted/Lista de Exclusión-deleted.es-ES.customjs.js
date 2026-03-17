@@ -1,0 +1,1 @@
+document.querySelector('.page_section.section-landing-search.color-inverse').style.display = 'none';

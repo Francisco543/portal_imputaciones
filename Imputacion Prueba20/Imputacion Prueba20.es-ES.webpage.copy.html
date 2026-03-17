@@ -1,0 +1,215 @@
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Imputación de Horas</title>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="stylesheet" href="/web-files/bootstrap.min.css" />
+<link rel="stylesheet" href="/web-files/portalbasictheme.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" />
+<link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css" />
+
+
+
+<main class="container py-4 ip20-page">
+  <section class="bg-white border-bottom shadow-sm mb-4 ip20-header ip20-page-banner">
+    <div class="px-3 py-3">
+      <div class="d-flex align-items-center justify-content-between">
+        <div>
+          <h1 class="fs-4 text-dark mb-1 fw-bold">Imputación de Horas</h1>
+          <p class="small text-dark mb-0">Gestión de horas por proyecto</p>
+        </div>
+        <div class="text-end">
+          <div class="small text-dark">Período actual:</div>
+          <div id="currentPeriodValue" class="small fw-bold text-dark" style="transition: all 0.2s;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ACTION BAR -->
+  <section class="bg-white p-4 rounded shadow-sm border d-flex flex-wrap gap-3 align-items-end mb-4 ip20-card">
+    <!-- FECHA INICIO -->
+    <div class="position-relative" style="width: fit-content; min-width: 180px;"><label
+        class="d-block small fw-bold green-text text-uppercase mb-2">Fecha de inicio</label><input type="text"
+        id="datePicker" placeholder="Selecciona un lunes..." class="form-control bg-white ip20-input"
+        style="width: 220px; cursor: pointer;" /></div>
+    <!-- PROYECTO -->
+    <div class="flex-grow-1 position-relative" style="min-width: 260px;">
+      <label class="d-block small fw-bold green-text text-uppercase mb-2">Proyecto</label>
+      <div class="position-relative">
+        <input id="projectInput" type="text" placeholder="Nombre o código del proyecto..." autocomplete="off"
+          class="form-control bg-white text-dark pe-5 ip20-input" /><button id="btnProjectModal" type="button"
+          title="Búsqueda avanzada"
+          class="btn position-absolute top-50 end-0 translate-middle-y border-0 bg-transparent d-flex align-items-center justify-content-center me-1">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+            stroke="#468e6e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <path d="m21 21-4.3-4.3"></path>
+          </svg>
+        </button>
+      </div>
+      <div id="projectDropdown"
+        class="d-none position-absolute top-100 start-0 end-0 mt-2 bg-white rounded shadow border overflow-auto ip20-card"
+        style="max-height: 16rem; z-index: 1050;"></div>
+    </div>
+    <!-- TAREA / PETICION (CAMPO UNICO DINAMICO) -->
+    <div id="taskField" class="flex-grow-1 position-relative d-none" style="min-width: 220px;">
+      <!-- CAMBIO DOCUMENTADO:
+           Este label ahora se actualiza por JS segun el tipo del proyecto (Tarea o Peticion). --><label
+        id="taskFieldLabel" class="d-block small fw-bold green-text text-uppercase mb-2">Tarea</label>
+      <div class="position-relative">
+        <input id="taskInput" type="text" placeholder="Selecciona una tarea..." autocomplete="off"
+          class="form-control bg-white text-dark pe-5 ip20-input" /><button id="btnTaskAll" type="button"
+          class="btn position-absolute top-50 end-0 translate-middle-y border-0 bg-transparent text-secondary me-1"
+          style="font-size: 12px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+            stroke="#468e6e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <path d="m21 21-4.3-4.3"></path>
+          </svg>
+        </button>
+      </div>
+      <div id="taskDropdown"
+        class="d-none position-absolute top-100 start-0 end-0 mt-2 bg-white rounded shadow border overflow-auto ip20-card"
+        style="max-height: 16rem; z-index: 1050;"></div>
+    </div>
+    <!-- HORAS -->
+    <div class="position-relative" style="width: 160px;">
+      <label class="d-block small fw-bold green-text text-uppercase mb-2 text-nowrap">Nº Horas Diarias</label>
+      <div class="position-relative">
+        <input id="hoursInput" type="text" placeholder="Horas..." autocomplete="off" inputmode="decimal"
+          class="form-control bg-white pe-5 small ip20-input" />
+
+        <button id="btnHoursSearch" type="button"
+          class="position-absolute top-50 end-0 translate-middle-y me-2 border-0 bg-transparent p-1"
+          aria-label="Mostrar horas">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+            stroke="#468e6e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <path d="m21 21-4.3-4.3"></path>
+          </svg>
+        </button>
+      </div>
+      <div id="hoursDropdown"
+        class="d-none position-absolute top-100 start-0 end-0 mt-2 bg-white rounded shadow border overflow-hidden ip20-card"
+        style="z-index: 1050;"></div>
+    </div>
+    <!-- BOTÓN CREAR --><button id="btnAdd" disabled=""
+      class="green-background text-white fw-bold py-2 px-4 rounded border-0 d-inline-flex align-items-center justify-content-center gap-2 ip20-btn-active">
+      <span class="bg-white"
+        style="width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; line-height: 0; flex-shrink: 0;"><svg
+          width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block;">
+          <path d="M12 5V19M5 12H19" stroke="#468e6e" stroke-width="3" stroke-linecap="round"></path>
+        </svg></span><span>Crear</span>
+    </button>
+  </section>
+  <!-- REGISTRO DE IMPUTACIONES -->
+  <h2 class="fs-5 fw-bold text-dark mb-3">Registro de Imputaciones</h2>
+  <div class="table-responsive bg-white rounded mb-4 ip20-table-wrap">
+    <table class="table mb-0 align-middle">
+      <thead class="border-bottom ip20-table-head">
+        <tr>
+          <th class="p-3  fw-bold green-text">Cód. Proyecto</th>
+          <th class="p-3  fw-bold green-text">Nombre Proyecto</th>
+          <th id="taskColumnHeader" class="p-3  fw-bold green-text text-center ip20-col-task d-none">Tarea</th>
+          <th id="requestColumnHeader" class="p-3  fw-bold green-text text-center ip20-col-request d-none">Petición</th>
+          <th id="taskAvailabilityColumnHeader"
+            class="p-3  fw-bold green-text text-center ip20-col-task-availability d-none">Horas disponibles
+          </th>
+          <th class="p-3  fw-bold text-uppercase green-text text-center ip20-day-col">L</th>
+          <th class="p-3  fw-bold text-uppercase green-text text-center ip20-day-col">M</th>
+          <th class="p-3  fw-bold text-uppercase green-text text-center ip20-day-col">X</th>
+          <th class="p-3  fw-bold text-uppercase green-text text-center ip20-day-col">J</th>
+          <th class="p-3  fw-bold text-uppercase green-text text-center ip20-day-col">V</th>
+
+          <th class="p-3  fw-bold green-text text-center">Resumen</th>
+          <th class="p-3  fw-bold green-text text-center">Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        <tr class="row">
+          <td class="cell"></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <!-- MODAL DE OBSERVACIONES -->
+  <div id="observationModal"
+    class="d-none position-fixed top-0 start-0 w-100 h-100 align-items-center justify-content-center p-4"
+    style="background: rgba(0,0,0,0.5); z-index: 1050;">
+    <div class="bg-white rounded shadow w-100 overflow-hidden ip20-modal-card" style="max-width: 42rem;">
+      <div class="px-4 py-3 border-bottom ip20-modal-head">
+        <div>
+          <h3 class="fw-bold text-dark fs-5 mb-0">Desglose de Tareas</h3>
+          <p id="modalProjectCode" class="small text-dark fw-medium mb-0"></p>
+        </div>
+      </div>
+      <div id="modalInputsContainer" class="p-4 overflow-auto" style="max-height: 70vh;"></div>
+      <div class="px-4 py-3 border-top d-flex justify-content-end gap-3 ip20-modal-foot">
+        <button id="modalCancelBtn" onclick="closeModal()" class="btn btn-light text-secondary">Cancelar</button><button
+          id="editObservationBtn" onclick="enableObservationEditing()" type="button"
+          class="d-none green-background text-white rounded border-0 px-4 py-2 d-inline-flex align-items-center gap-2 ip20-btn-active"><i
+            data-lucide="pencil" size="18"></i> Editar</button><button onclick="saveObservation()"
+          id="saveObservationBtn"
+          class="green-background text-white rounded border-0 px-4 py-2 ip20-btn-active">Guardar</button>
+      </div>
+    </div>
+  </div>
+  <!-- BLOQUE CONTROLADOR HORAS SEMANALES -->
+  <div id="totalPanel" class="mt-4 p-4 rounded border border-2">
+    <div class="d-flex align-items-center justify-content-between">
+      <div class="d-flex align-items-center gap-3">
+        <div id="alertIcon" class="d-none text-danger"><i data-lucide="alert-circle" size="24"></i></div>
+        <div>
+          <h3 class="fs-5 fw-semibold text-dark mb-0">Total de Horas Semanales</h3>
+          <p id="limitText" class="small text-secondary mb-0">Límite máximo: 40 horas</p>
+        </div>
+      </div>
+      <div class="text-end">
+        <div id="totalDisplay" class="fs-2 fw-bold">0.00h</div>
+        <p id="diffText" class="small mt-1 mb-0"></p>
+      </div>
+    </div>
+  </div>
+  <!-- BLOQUE BOTÓN ENVIAR 
+  <div class="d-flex justify-content-end mt-4">
+    <button id="btnSubmit" onclick="submitData()" disabled aria-disabled="true"
+      class="green-background text-white fw-bold py-3 px-4 rounded border-0 d-inline-flex align-items-center justify-content-center gap-1 ip20-btn-disabled">
+      <span>Enviar</span>
+    </button>
+  </div> --><!-- MODAL DE CONFIRMACIÓN PARA ELIMINAR -->
+  <div id="deleteConfirmModal"
+    class="d-none position-fixed top-0 start-0 w-100 h-100 align-items-center justify-content-center p-4"
+    style="background: rgba(0,0,0,0.5); z-index: 1050;">
+    <div class="bg-white rounded shadow w-100 overflow-hidden ip20-modal-card" style="max-width: 28rem;">
+      <div class="px-4 py-3 border-bottom ip20-modal-head">
+        <h3 class="fw-bold text-dark fs-5 mb-0">Confirmar eliminación</h3>
+      </div>
+      <div class="p-4">
+        <p id="deleteProjectInfo" class="small text-dark text-center mb-0"></p>
+      </div>
+      <div class="px-4 py-3 border-top d-flex justify-content-between align-items-center gap-3 ip20-modal-foot">
+        <button id="cancelDeleteBtn" onclick="closeDeleteModal()"
+          class="btn btn-light text-secondary">Cancelar</button><button id="confirmDeleteBtn" onclick="confirmDelete()"
+          class="green-background text-white rounded border-0 px-4 py-2 d-inline-flex align-items-center gap-2 ip20-btn-active"><i
+            data-lucide="trash-2" size="18"></i> Eliminar</button>
+      </div>
+    </div>
+  </div>
+</main>
+<!-- CAMBIO DOCUMENTADO:
+     Exponemos el usuario autenticado del portal en la propia página para que el JS
+     pueda asociar correctamente la cabecera de imputación al contacto logueado. -->
+<input type="hidden" id="contactId" value="contactid" /><input type="hidden" id="userId" value="id" />
+<input type="hidden" id="userName" value="John Doe" />
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/es.js"></script>
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+<!-- JS UNIFICADO -->
+<script src="./Imputación Prueba20.es-ES.customjs.js"></script>
+<div class="row sectionBlockLayout text-start"
+  style="display: flex; flex-wrap: wrap; margin: 0px; min-height: auto; padding: 8px;">
+  <div class="container" style="padding: 0; display: flex; flex-wrap: wrap;">
+    <div class="col-lg-12 columnBlockLayout"
+      style="flex-grow: 1; display: flex; flex-direction: column; min-width: 250px;"></div>
+  </div>
+</div>
