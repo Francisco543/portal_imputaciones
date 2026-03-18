@@ -3025,7 +3025,7 @@ async function handleAddHours() {
   const existingEntryIndex = EntryManager.findExistingEntry(projectId, taskRequired, taskKey, taskId);
 
   if (existingEntryIndex >= 0) {
-    showToast("Ya existe una imputación para este proyecto", "info");
+    showToast("Ya existe una imputación para este proyecto", "success");
 
     refreshUI({ lockDatePicker: true });
     resetActionBar(true);
@@ -3072,7 +3072,7 @@ async function handleAddHours() {
 }
 
 window.handleEdit = function (code) {
-  showToast(`Editando proyecto ${code}`, "info");
+  showToast(`Editando proyecto ${code}`, "success");
 };
 
 window.handleCopy = function (projectId) {
@@ -3097,7 +3097,7 @@ window.handleDetails = function (projectId) {
   if (!entry) return;
 
   const total = Object.values(entry.hours).reduce((a, b) => a + b, 0);
-  showToast(`Proyecto ${entry.projectCode}: ${total} horas totales`, "info");
+  showToast(`Proyecto ${entry.projectCode}: ${total} horas totales`, "success");
 };
 
 window.handleDelete = function (entryId) {
@@ -4278,7 +4278,7 @@ window.cancelCopy = async function cancelCopy() {
     if (headerId) {
       const hasPersistedChildren = await headerHasPersistedDailyRecords(headerId);
       if (hasPersistedChildren) {
-        showToast("No se puede cancelar la copia porque ya existen imputaciones guardadas.", "info");
+        showToast("No se puede cancelar la copia porque ya existen imputaciones guardadas.", "success");
         isCancellingCopy = false;
         syncCopyActionButtonsState();
         return;
@@ -4599,7 +4599,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch (error) {
       blockedHeaderWeekStarts = new Set();
       console.warn("No se pudieron cargar las cabeceras existentes para bloquear lunes ocupados:", error);
-      showToast("No se pudieron validar las cabeceras existentes. Solo se bloquearon los dias no lunes.", "info");
     }
   }
 

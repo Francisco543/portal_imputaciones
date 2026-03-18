@@ -164,7 +164,7 @@ function consumePendingCopyToast() {
         const parsed = JSON.parse(raw);
         if (!parsed?.message) return;
 
-        showToast(parsed.message, parsed.type || "info");
+        showToast(parsed.message, parsed.type || "success");
     } catch (error) {
         console.warn("No se pudo recuperar el toast pendiente de copia:", error);
     }
@@ -998,7 +998,7 @@ function buildDeleteDescription(record) {
  * @returns {string} Mensaje descriptivo para el usuario.
  */
 function buildCopyDescription(record) {
-    if (!record) return "Se copiara la cabecera seleccionada a la semana actual.";
+    if (!record) return "Se copiará la cabecera seleccionada a la semana actual.";
 
     return `Cabecera de ${record.contacto || "Sin contacto"} (${formatDateDisplay(record.fechaInicio)} - ${formatDateDisplay(record.fechaFin)})`;
 }
@@ -1341,7 +1341,7 @@ async function handleConfirmCopyClick() {
             recordToCopyId = null;
             hideCopyDialog();
             renderTable();
-            showToast("Ya existe una cabecera en la semana actual.", "info");
+            showToast("Ya existe una cabecera en la semana actual.", "success");
             return;
         }
 
@@ -1610,7 +1610,7 @@ function renderPagination(totalItems) {
     const endItem = Math.min(paginationState.currentPage * PAGE_SIZE, totalItems);
 
     dom.paginationInfo.textContent = `Mostrando ${startItem}-${endItem} de ${totalItems}`;
-    
+
     // Estado de los botones
     dom.prevPageButton.disabled = paginationState.currentPage === 1;
     dom.nextPageButton.disabled = paginationState.currentPage === totalPages;
@@ -1632,11 +1632,11 @@ function renderTable() {
     }
 
     // 2. Obtener registros filtrados/ordenados y LUEGO paginados
-    const visibleRecords = getVisibleRecords(); 
+    const visibleRecords = getVisibleRecords();
     const totalItems = visibleRecords.length;
-    
+
     // Forzamos el ajuste de la página actual si los filtros reducen la cantidad de registros
-    clampCurrentPage(totalItems); 
+    clampCurrentPage(totalItems);
 
     const paginatedRecords = getPaginatedRecords(visibleRecords);
 
