@@ -74,6 +74,7 @@ var dom = {
     contactIdInput: null,
     userIdInput: null,
     userNameInput: null,
+    isAdminRoleInput: null,
     sortButtons: [],
     paginationWrap: null,
     paginationInfo: null,
@@ -100,6 +101,7 @@ var dom = {
  * @property {string} contactId Id del contacto del portal.
  * @property {string} userId Id del usuario autenticado.
  * @property {string} userName Nombre completo del usuario.
+ * @property {boolean} isAdminRole Indica si el usuario tiene rol web de administrador.
  */
 
 /* ===================== utils.js ===================== */
@@ -400,6 +402,8 @@ function escapeCsvValue(value) {
 function getPortalUserContext() {
     const portalUser = window.portalUser || {};
     const dynamicPortalUser = window.Microsoft?.Dynamic365?.Portal?.User || {};
+    const isAdminRole =
+        String(dom.isAdminRoleInput?.value || "").trim().toLowerCase() === "true";
     const userContext = {
         contactId: sanitizeGuid(
             dynamicPortalUser.contactId ||
@@ -417,6 +421,7 @@ function getPortalUserContext() {
             dom.userNameInput?.value ||
             ""
         ).trim(),
+        isAdminRole: isAdminRole,
     };
 
     console.log("[CabeceraImputaciones] Contexto de usuario resuelto:", userContext);
@@ -586,7 +591,7 @@ function buildCabeceraIds(diarioRows) {
  * @returns {Promise<CabeceraRecord>} Cabecera normalizada lista para renderizar.
  */
 async function fetchCabeceraDetail(cabeceraId, portalUser) {
-    const url = `/_api/cr774_registros(${cabeceraId})?$select=cr774_registroid,cr774_fechaderegistro,exc_fechafinal,_cr774_contact_value,exc_estadoaprobacionsemana,exc_totalhorasregistradas`;
+    const url = `/_api/cr774_registros(${cabeceraId})`;
     console.log(`[CabeceraImputaciones] Cargando detalle de cabecera ${cabeceraId}:`, url);
 
     try {
@@ -627,9 +632,46 @@ async function fetchCabecerasForCurrentUser() {
     const portalUser = getPortalUserContext();
     console.log("[CabeceraImputaciones] Inicio de carga de cabeceras del usuario.");
 
-    if (!portalUser.contactId) {
+    if (!portalUser.isAdminRole && !portalUser.contactId) {
         console.error("[CabeceraImputaciones] Usuario sin contactId. No se puede consultar la Web API.");
         throw new Error("No se pudo identificar el usuario logeado.");
+    }
+
+    if (portalUser.isAdminRole) {
+        const headersUrl =
+            `/_api/cr774_registros` +
+            `?$select=cr774_registroid,cr774_fechaderegistro,exc_fechafinal,_cr774_contact_value,exc_estadoaprobacionsemana,exc_totalhorasregistradas` +
+            `&$top=500`;
+        console.log("[CabeceraImputaciones] URL cabeceras admin:", headersUrl);
+
+        const headersResponse = await fetch(headersUrl, {
+            method: "GET",
+            headers: getApiHeaders(),
+            credentials: "same-origin",
+        });
+
+        console.log("[CabeceraImputaciones] Respuesta cabeceras admin:", {
+            ok: headersResponse.ok,
+            status: headersResponse.status,
+            statusText: headersResponse.statusText,
+        });
+
+        if (!headersResponse.ok) {
+            const errorText = await headersResponse.text().catch(() => "");
+            console.error("[CabeceraImputaciones] Error HTTP cargando cabeceras admin:", errorText);
+            throw new Error(errorText || "No se pudieron cargar todas las cabeceras.");
+        }
+
+        const headersData = await headersResponse.json();
+        console.log("[CabeceraImputaciones] Payload cabeceras admin:", headersData);
+        const headerRows = Array.isArray(headersData?.value) ? headersData.value : [];
+        const allRecords = headerRows
+            .map((record) => mapCabeceraRecord(record, portalUser))
+            .filter((record) => !!record?.id)
+            .sort((leftRecord, rightRecord) => getDateSortValue(rightRecord.fechaInicio) - getDateSortValue(leftRecord.fechaInicio));
+
+        console.log("[CabeceraImputaciones] Numero de cabeceras admin renderizables:", allRecords.length);
+        return allRecords;
     }
 
     // Añadimos $top=100 para asegurar que traiga suficientes líneas diarias
@@ -1094,6 +1136,28 @@ function openDeleteDialog(recordId) {
     }
 }
 
+async function getCabecerasImputacion() {
+
+    const portalUser = getPortalUserContext();
+    if (!portalUser.contactId) {
+        throw new Error("No se pudo identificar el usuario logeado.");
+    }
+    const url =
+        `/_api/cr774_registros` +
+        `?$filter=_cr774_contact_value eq ${portalUser.contactId}` +
+        `&$top=50`;
+
+    console.log("[CabeceraImputaciones] Validando cabecera en semana actual:", url);
+
+    const response = await fetch(url, {
+        method: "GET",
+        headers: getApiHeaders(),
+        credentials: "same-origin",
+    });
+
+    console.log(response, "CABECERAS")
+}
+getCabecerasImputacion()
 /**
  * Comprueba si el usuario actual ya tiene una cabecera creada para la semana actual.
  *
@@ -1686,6 +1750,7 @@ function cacheDomElements() {
     dom.contactIdInput = document.getElementById("contactId");
     dom.userIdInput = document.getElementById("userId");
     dom.userNameInput = document.getElementById("userName");
+    dom.isAdminRoleInput = document.getElementById("isAdminRole");
     dom.sortButtons = Array.from(document.querySelectorAll(".cab20-sort-btn"));
     dom.paginationWrap = document.getElementById("cab20Pagination");
     dom.paginationInfo = document.getElementById("cab20PaginationInfo");

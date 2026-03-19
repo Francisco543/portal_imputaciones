@@ -4,6 +4,15 @@ Adaptado para funcionar SIN CDN de Tailwind
 Incluye (sin simplificar) el contenido original de:
 constants.js, state.js, utils.js, validators.js, entryManager.js, toast.js, dates.js, actionbar.js, actions.js, render.js, main.js
 Orden de carga respetado.
+
+
+TRAZABILIDAD exc_linenumber
+- Estado global de secuencia por cabecera activa: líneas 97-102
+- Cálculo del siguiente valor disponible (max + 1): líneas 282-309
+- Reserva del consecutivo en memoria (reserve + 1): líneas 321-328
+- Reset al cambiar la cabecera activa: líneas 1363-1367
+- Asignación al crear DailyRecord: líneas 3431-3438
+- Inicialización al cargar la cabecera activa: líneas 4680-4686
 ========================================================= */
 
 /* ===================== constants.js ===================== */
@@ -89,6 +98,10 @@ var isCopyPreviewMode = false;
 var isSubmittingCopiedEntries = false;
 var isCancellingCopy = false;
 var isDeletingEntryFromModal = false;
+// Secuencia de exc_linenumber cacheada para la cabecera actualmente cargada.
+var nextDailyLineNumber = null;
+// Cabecera a la que pertenece la secuencia cacheada de exc_linenumber.
+var nextDailyLineNumberHeaderId = null;
 
 // CAMBIO DOCUMENTADO:
 // Modo de item por tipo de proyecto:
@@ -159,6 +172,10 @@ function refreshUI({ lockDatePicker = false } = {}) {
 
 function isCopyFlowLocked() {
   return isCopyPreviewMode === true;
+}
+
+function shouldPersistImmediately() {
+  return isCopyPreviewMode !== true;
 }
 
 function setSecondaryButtonBusyState(button, enabled, busyLabel, idleLabel) {
@@ -251,6 +268,67 @@ async function fetchJson(url) {
   }
 
   return res.json();
+}
+
+/**
+ * Inicializa y devuelve el siguiente `exc_linenumber` disponible para la
+ * cabecera activa consultando el valor máximo ya persistido en Dataverse.
+ *
+ * La función cachea el resultado por `headerId` para no recalcular la secuencia
+ * mientras el usuario sigue trabajando sobre la misma cabecera.
+ *
+ * @param {string} headerId Identificador de la cabecera activa sobre la que se crearán diarios.
+ * @returns {Promise<number>} Próximo `exc_linenumber` disponible (`max + 1`).
+ * @throws {Error} Si no se puede resolver una cabecera válida para calcular la secuencia.
+ */
+async function ensureNextDailyLineNumber(headerId) {
+  const normalizedHeaderId = String(headerId || "").trim();
+  if (!normalizedHeaderId) {
+    throw new Error("No se pudo resolver la cabecera activa para calcular exc_linenumber.");
+  }
+
+  if (
+    nextDailyLineNumber !== null &&
+    nextDailyLineNumberHeaderId === normalizedHeaderId
+  ) {
+    return nextDailyLineNumber;
+  }
+
+  const data = await fetchJson(
+    `/_api/exc_diarioimputacions?$select=exc_linenumber&$filter=_exc_cr774_registro_value eq ${normalizedHeaderId}&$top=500`
+  );
+  const rows = Array.isArray(data?.value) ? data.value : [];
+  const maxLineNumber = rows.reduce((maxValue, row) => {
+    const numericValue = Number(row?.exc_linenumber);
+    if (!Number.isFinite(numericValue)) {
+      return maxValue;
+    }
+
+    return Math.max(maxValue, numericValue);
+  }, 0);
+
+  nextDailyLineNumber = maxLineNumber + 1;
+  nextDailyLineNumberHeaderId = normalizedHeaderId;
+  return nextDailyLineNumber;
+}
+
+/**
+ * Reserva el siguiente `exc_linenumber` en memoria y avanza la secuencia local.
+ *
+ * Debe invocarse únicamente después de haber inicializado la secuencia con
+ * `ensureNextDailyLineNumber(...)`.
+ *
+ * @returns {number} Valor reservado de `exc_linenumber` para el próximo diario nuevo.
+ * @throws {Error} Si la secuencia todavía no se ha inicializado para la cabecera activa.
+ */
+function reserveNextDailyLineNumber() {
+  if (!Number.isFinite(nextDailyLineNumber) || nextDailyLineNumber === null) {
+    throw new Error("La secuencia de exc_linenumber no está inicializada.");
+  }
+
+  const reservedLineNumber = nextDailyLineNumber;
+  nextDailyLineNumber += 1;
+  return reservedLineNumber;
 }
 
 // CAMBIO DOCUMENTADO:
@@ -933,8 +1011,10 @@ function preloadEntries(imputaciones, options = {}) {
     const dayKey = dayKeyFromDate(item.exc_imputationdate);
     const hours = item.exc_quantity || 0;
     // Metadatos de línea para poder agrupar los 5 dias en una sola fila de UI.
-    const lineNumber = item.exc_linenumber ?? null;
     const journalBatchName = item.exc_journalbatchname || null;
+
+
+    const lineNumber = item.exc_linenumber ?? null;    
     const projectId = item._exc_proyectoimputacion_value
       || item.exc_Proyectoimputacion?.exc_proyectoimputacionid
       || null;
@@ -948,9 +1028,7 @@ function preloadEntries(imputaciones, options = {}) {
     );
 
     // Agrupamos por batch+lí­nea para consolidar en una sola fila los 5 registros diarios.
-    const key = (journalBatchName && lineNumber !== null)
-      ? `${journalBatchName}__${lineNumber}`
-      : `${projectId || projectCode}_${workItemFields.workItemId || workItemFields.workItemName || ""}`;
+    const key = buildFunctionalWorkItemKey(projectCode, workItemFields);
 
     if (!grouped[key]) {
       grouped[key] = {
@@ -992,11 +1070,13 @@ function preloadEntries(imputaciones, options = {}) {
     }
 
     // Mantenemos horas por objeto (monday..friday).
-    grouped[key].hours[dayKey] = hours;
+    grouped[key].hours[dayKey] = Number(grouped[key].hours[dayKey] || 0) + Number(hours || 0);
     // Guardamos id fisico por dia para diagnostico/operaciones futuras.
     grouped[key].dayRecordIds[dayKey] = item.exc_diarioimputacionid;
     // Mantenemos tambien la vista por array fijo [L, M, X, J, V].
-    grouped[key].weekHoursArray[DAY_TO_INDEX[dayKey]] = hours > 0 ? hours : null;
+    grouped[key].weekHoursArray[DAY_TO_INDEX[dayKey]] = grouped[key].hours[dayKey] > 0
+      ? grouped[key].hours[dayKey]
+      : null;
 
     if (observation) {
       grouped[key].observaciones[dayKey] = observation;
@@ -1009,7 +1089,6 @@ function preloadEntries(imputaciones, options = {}) {
       entry.headerId = targetHeaderId;
       entry.dayRecordIds = {};
       entry.dbRecordIds = [];
-    } else {
       entry.dbRecordIds = Array.from(new Set((entry.dbRecordIds || []).filter(Boolean)));
     }
     normalizeEntryWorkItem(entry);
@@ -1239,31 +1318,32 @@ function encodeStableKeyPart(value) {
   return encodeURIComponent(String(value ?? "").trim());
 }
 
+function buildFunctionalWorkItemKey(projectCode, workItemFields) {
+  const normalizedProjectCode = String(projectCode || "").trim() || "-";
+  const normalizedMode = String(workItemFields?.workItemMode || "none").trim() || "none";
+  const normalizedWorkItemIdentity = String(
+    workItemFields?.workItemId || workItemFields?.workItemName || ""
+  ).trim();
+
+  return [
+    "project",
+    encodeStableKeyPart(normalizedProjectCode),
+    "mode",
+    encodeStableKeyPart(normalizedMode),
+    "item",
+    encodeStableKeyPart(normalizedWorkItemIdentity),
+  ].join("__");
+}
+
 function buildStableEntryId(entry) {
   if (!entry || typeof entry !== "object") return "";
 
   const normalized = normalizeEntryWorkItem(entry);
-  const journalBatchName = String(normalized.journalBatchName || "").trim();
-  const lineNumber = normalized.lineNumber;
-
-  if (journalBatchName && lineNumber !== null && lineNumber !== undefined && lineNumber !== "") {
-    return [
-      "batch",
-      encodeStableKeyPart(journalBatchName),
-      "line",
-      encodeStableKeyPart(lineNumber),
-    ].join("__");
-  }
 
   return [
     "header",
     encodeStableKeyPart(normalized.headerId || currentHeaderId || normalized.weekStart || ""),
-    "project",
-    encodeStableKeyPart(normalized.projectId || normalized.projectCode || ""),
-    "mode",
-    encodeStableKeyPart(normalized.workItemMode || "none"),
-    "item",
-    encodeStableKeyPart(normalized.workItemId || normalized.workItemName || ""),
+    buildFunctionalWorkItemKey(normalized.projectCode || normalized.projectId || "", normalized),
   ].join("__");
 }
 
@@ -1284,6 +1364,9 @@ function setHeaderIdInUrl(headerId) {
 
   window.history.replaceState({}, "", url.toString());
   currentHeaderId = headerId || null;
+  // Al cambiar la cabecera activa se invalida la secuencia cacheada y se recalculará para el nuevo headerId.
+  nextDailyLineNumber = null;
+  nextDailyLineNumberHeaderId = currentHeaderId;
 }
 
 function extractEntityIdFromHeaders(headers) {
@@ -2537,7 +2620,6 @@ function initProjectAutocomplete() {
 
       if (!isHiddenEl(dropdown)) {
         hideDropdown();
-        return;
       }
 
       loadFirstPage("").catch(err => {
@@ -2652,7 +2734,6 @@ function initTaskDropdown() {
 
       if (!selectedProjectId) {
         showToast?.("Primero selecciona un proyecto.", "error");
-        return;
       }
 
       const all = getTasksForProject();
@@ -2665,12 +2746,10 @@ function initTaskDropdown() {
           "info"
         );
         hide();
-        return;
       }
 
       if (!isHiddenEl(dropdown)) {
         hide();
-        return;
       }
 
       render(all);
@@ -2883,9 +2962,8 @@ function syncAddButtonState() {
   const btnHoursSearch = document.getElementById("btnHoursSearch");
 
   const hasPendingEdit = editingHoursEntryId !== null;
-  const isCopyLocked = isCopyFlowLocked();
   const canAdd = canEnableAddButton();
-  setThemedButtonState(btnAdd, !isCopyLocked && canAdd);
+  setThemedButtonState(btnAdd, canAdd);
 
   const controls = [
     projectInput,
@@ -2898,7 +2976,7 @@ function syncAddButtonState() {
   ];
 
   controls.forEach(control => {
-    setControlDisabledState(control, hasPendingEdit || isCopyLocked);
+    setControlDisabledState(control, hasPendingEdit);
   });
 
   if (!hasPendingEdit) {
@@ -3102,7 +3180,9 @@ window.handleDetails = function (projectId) {
 
 window.handleDelete = function (entryId) {
   // Punto único de borrado para mantener el flujo centralizado.
-  return deleteEntryWithDataverseSync(entryId);
+  return shouldPersistImmediately()
+    ? deleteEntryWithDataverseSync(entryId)
+    : deleteEntryLocally(entryId);
 };
 
 async function getRequestVerificationToken() {
@@ -3237,9 +3317,8 @@ function clearStoredCopyReturnUrl() {
 }
 
 function navigateToHeaderList() {
-  const returnUrl = getStoredCopyReturnUrl();
   clearStoredCopyReturnUrl();
-  window.location.href = returnUrl || HEADER_LIST_URL;
+  window.location.href = HEADER_LIST_URL;
 }
 
 async function headerHasPersistedDailyRecords(headerId) {
@@ -3334,8 +3413,22 @@ function buildDailyPayload(entry, day, hours) {
   return appendDailyWorkItemBindings(payload, entry);
 }
 
+/**
+ * Crea un diario nuevo en Dataverse asignando un `exc_linenumber`
+ * consecutivo e independiente para ese registro físico.
+ *
+ * Esta numeración solo se aplica en creación. Los diarios que ya existen
+ * y se editan posteriormente conservan su `exc_linenumber`.
+ *
+ * @param {Object} entry Línea semanal del frontend asociada al diario a crear.
+ * @param {string} day Clave interna del día laboral.
+ * @param {number} hours Horas a persistir para ese día.
+ * @returns {Promise<string>} Identificador del diario creado en Dataverse.
+ */
 async function createDailyRecord(entry, day, hours) {
   const payload = buildDailyPayload(entry, day, hours);
+  await ensureNextDailyLineNumber(entry.headerId || currentHeaderId);
+  payload.exc_linenumber = reserveNextDailyLineNumber();
   const { id } = await createDataverseRecord(
     "exc_diarioimputacions",
     payload,
@@ -3504,6 +3597,36 @@ async function deleteEntryWithDataverseSync(entryId) {
     return;
   }
 
+  refreshUI({ lockDatePicker: true });
+}
+
+async function deleteEntryLocally(entryId) {
+  const entry = entries.find(e => e.id === entryId);
+  if (!entry) return;
+
+  invalidateTaskAvailabilityCache(entry);
+
+  if (Array.isArray(entry.weekHoursArray)) {
+    entry.weekHoursArray = createWeekHoursArray();
+  }
+
+  DAYS_ARRAY.forEach(day => {
+    if (entry.hours) entry.hours[day] = 0;
+    if (entry.observaciones) entry.observaciones[day] = "";
+  });
+
+  if (entry.dayRecordIds) {
+    Object.keys(entry.dayRecordIds).forEach(day => {
+      entry.dayRecordIds[day] = null;
+    });
+  }
+
+  entry.dbRecordIds = [];
+
+  if (!EntryManager.deleteEntry(entryId)) return;
+
+  saveState?.();
+  showToast("Imputación eliminada", "success");
   refreshUI({ lockDatePicker: true });
 }
 
@@ -3711,7 +3834,7 @@ function renderEditInput(entryId, day, currentValue) {
     : (currentValue || 0);
 
   const max = DAY_MAX_HOURS[day];
-  const disabledAttr = isCopyFlowLocked() ? 'disabled aria-disabled="true"' : "";
+  const disabledAttr = "";
 
   return `
     <div class="d-flex justify-content-center">
@@ -3732,23 +3855,6 @@ function renderEditInput(entryId, day, currentValue) {
 }
 
 function renderActionButtons(entry, isEditing, tieneObservaciones) {
-  if (isCopyFlowLocked()) {
-    return `
-      <button type="button" title="Observaciones bloqueadas durante la copia"
-        class="btn btn-sm border-0 text-secondary opacity-50" disabled aria-disabled="true">
-        <i data-lucide="clipboard-list" size="18"></i>
-      </button>
-      <button type="button" title="Edición bloqueada durante la copia"
-        class="btn btn-sm text-secondary border-0 opacity-50" disabled aria-disabled="true">
-        <i data-lucide="pencil" size="18"></i>
-      </button>
-      <button type="button" title="Eliminación bloqueada durante la copia"
-        class="btn btn-sm text-secondary border-0 opacity-50" disabled aria-disabled="true">
-        <i data-lucide="trash-2" size="18"></i>
-      </button>
-    `;
-  }
-
   if (isEditing) {
     return `
       <button type="button" onclick="cancelEditHours()" title="Cancelar"
@@ -3783,7 +3889,6 @@ function renderActionButtons(entry, isEditing, tieneObservaciones) {
 // ========================================
 
 window.startEditHours = function (entryId) {
-  if (isCopyFlowLocked()) return;
   const entry = entries.find(e => e.id === entryId);
   if (!entry) return;
 
@@ -3879,14 +3984,16 @@ window.confirmEditHours = async function () {
     return;
   }
 
-  if (!hasAnyHours && !hadPersistedRecordsBefore) {
+  if (!hasAnyHours && !hadPersistedRecordsBefore && shouldPersistImmediately()) {
     showToast("Debes indicar al menos una hora en algún día", "error");
     return;
   }
 
   if (!hasAnyHours) {
     try {
-      await deleteZeroHourDayRecords(entry, prev, draft);
+      if (shouldPersistImmediately()) {
+        await deleteZeroHourDayRecords(entry, prev, draft);
+      }
       invalidateTaskAvailabilityCache(entry);
     } catch (error) {
       console.error("[edit-hours] Error eliminando registros diarios puestos a 0h", error);
@@ -3908,7 +4015,11 @@ window.confirmEditHours = async function () {
     );
 
     if (entries.length === 0) {
-      await cleanupEmptyHeaderAndResetUi();
+      if (shouldPersistImmediately()) {
+        await cleanupEmptyHeaderAndResetUi();
+      } else {
+        refreshUI({ lockDatePicker: true });
+      }
       return;
     }
 
@@ -3953,7 +4064,6 @@ window.confirmEditHours = async function () {
 // CAMBIO DOCUMENTADO:
 // Modal unico de observaciones para ambos flujos (click manual y post-edicion).
 window.openModal = function (entryId) {
-  if (isCopyFlowLocked()) return;
   const entry = entries.find(e => e.id === entryId);
   if (!entry) return;
 
@@ -4107,7 +4217,7 @@ window.saveObservation = async function () {
 
   try {
     syncObservationModalButtonsState("confirm", false);
-    if (pendingPersistence) {
+    if (pendingPersistence && shouldPersistImmediately()) {
       const assignedHoursValidation = await validateAssignedHoursLimit(entry, pendingPersistence.nextDraft);
       if (!assignedHoursValidation.valid) {
         syncObservationModalButtonsState("idle", true);
@@ -4125,7 +4235,21 @@ window.saveObservation = async function () {
         entry._openObsAfterSave = false;
       }
       clearPendingEntryPersistence(entry);
-    } else {
+    } else if (pendingPersistence) {
+      const assignedHoursValidation = await validateAssignedHoursLimit(entry, pendingPersistence.nextDraft);
+      if (!assignedHoursValidation.valid) {
+        syncObservationModalButtonsState("idle", true);
+        showToast(assignedHoursValidation.error, "error");
+        return;
+      }
+
+      invalidateTaskAvailabilityCache(entry);
+      EntryManager.cleanupObservations(entry, pendingPersistence.prevDraft);
+      if (pendingPersistence.wasNewEntry && entry._openObsAfterSave === true) {
+        entry._openObsAfterSave = false;
+      }
+      clearPendingEntryPersistence(entry);
+    } else if (shouldPersistImmediately()) {
       await syncObservationRecords(entry, daysWithHours);
     }
   } catch (error) {
@@ -4147,37 +4271,19 @@ window.closeModal = async function (preserveChanges = false) {
   syncObservationModalButtonsState("cancel", false);
   const entry = entries.find(e => e.id === editingEntryId);
   const pendingPersistence = entry?._pendingPersistence || null;
-
-  if (entry && pendingPersistence && !preserveChanges) {
-    const hadPersistedRecordsBefore = !!pendingPersistence.hadPersistedRecordsBefore;
-    revertPendingEntryPersistence(entry);
-
-    if (!hadPersistedRecordsBefore && !EntryManager.hasAnyHours(entry)) {
-      EntryManager.deleteEntry(entry.id);
-      saveState?.();
-
-      // Si cancela el modal de observaciones de una línea nueva,
-      // se elimina solo la línea de imputación, pero NO la cabecera.
-      if (pendingPersistence.wasNewEntry && currentHeaderId) {
-        await cleanupEmptyHeaderAndResetUi();
-        navigateToHeaderList();
-        return;
-      }
-
-      refreshUI({ lockDatePicker: true });
-    } else {
-      saveState?.();
-      refreshUI({ lockDatePicker: true });
-    }
-  }
-
   const modal = document.getElementById("observationModal");
   if (!modal) return;
+
+  if (entry && pendingPersistence && !preserveChanges) {
+    editingHoursEntryId = entry.id;
+    hoursDraft = { ...pendingPersistence.nextDraft };
+  }
 
   editingEntryId = null;
   hasCommentChanges = false;
   hideEl(modal);
   syncObservationModalButtonsState("idle", false);
+  refreshUI({ lockDatePicker: true });
 };
 
 // ========================================
@@ -4467,7 +4573,6 @@ window.trackCommentChanges = function (entryId) {
 // ========================================
 
 window.openDeleteModal = function (entryId) {
-  if (isCopyFlowLocked()) return;
   const entry = entries.find(e => e.id === entryId);
   if (!entry) return;
 
@@ -4555,6 +4660,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         resetPersistedState: isCopyMode && !!sourceCabeceraId,
         targetHeaderId: cabeceraId,
       });
+      // La secuencia se inicializa siempre contra la cabecera destino activa (`id`),
+      // incluso en copia, y nunca contra la cabecera origen (`sourceId`).
+      await ensureNextDailyLineNumber(cabeceraId);
 
       const fechaInicioRaw = cabecera["cr774_fechaderegistro@OData.Community.Display.V1.FormattedValue"];
       startDate = fechaInicioRaw;
@@ -4627,3 +4735,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     checkAndLockDatePicker?.();
   }, 100);
 });
+
+
+
