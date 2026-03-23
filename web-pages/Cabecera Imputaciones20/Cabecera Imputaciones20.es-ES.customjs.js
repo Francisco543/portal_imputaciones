@@ -43,6 +43,7 @@ var copyDialog = null;
 var isDeletingRecord = false;
 var isNavigatingToCopy = false;
 var hasCurrentWeekHeader = false;
+var lastAutoRefreshAt = 0;
 
 var sortState = {
     key: "fechaInicio",
@@ -89,7 +90,6 @@ var dom = {
  * @property {string} id Identificador unico del registro.
  * @property {string} fechaInicio Fecha de inicio en formato ISO.
  * @property {string} fechaFin Fecha de fin en formato ISO.
- * @property {string} estadoAprobacion Estado visible del registro.
  * @property {string} contacto Nombre del contacto asociado.
  * @property {number} totalHoras Total de horas imputadas.
  */
@@ -551,16 +551,12 @@ function mapCabeceraRecord(record, portalUser) {
         record?.exc_fechafinal ||
         "";
     const fechaFin = normalizeApiDate(fechaFinRaw) || buildEndDateFromStart(fechaInicio);
-    const totalHoras = Number(record?.exc_totalhorasregistradas);
+    const totalHoras = Number(record?.cr774_jgvtotalhoras ?? record?.exc_totalhorasregistradas);
 
     return {
         id: sanitizeGuid(record?.cr774_registroid || record?.cr774_registrosid || ""),
         fechaInicio: fechaInicio,
         fechaFin: fechaFin,
-        estadoAprobacion:
-            record?.["exc_estadoaprobacionsemana@OData.Community.Display.V1.FormattedValue"] ||
-            String(record?.exc_estadoaprobacionsemana ?? "").trim() ||
-            "Sin estado",
         contacto:
             record?.["_cr774_contact_value@OData.Community.Display.V1.FormattedValue"] ||
             portalUser.userName ||
@@ -637,103 +633,79 @@ async function fetchCabecerasForCurrentUser() {
         throw new Error("No se pudo identificar el usuario logeado.");
     }
 
-    if (portalUser.isAdminRole) {
-        const headersUrl =
-            `/_api/cr774_registros` +
-            `?$select=cr774_registroid,cr774_fechaderegistro,exc_fechafinal,_cr774_contact_value,exc_estadoaprobacionsemana,exc_totalhorasregistradas` +
-            `&$top=500`;
-        console.log("[CabeceraImputaciones] URL cabeceras admin:", headersUrl);
+    const headersUrl =
+        `/_api/cr774_registros` +
+        `?$select=cr774_registroid,cr774_fechaderegistro,exc_fechafinal,_cr774_contact_value,cr774_jgvtotalhoras` +
+        `${portalUser.isAdminRole ? "" : `&$filter=_cr774_contact_value eq ${portalUser.contactId}`}` +
+        `&$top=500`;
 
-        const headersResponse = await fetch(headersUrl, {
-            method: "GET",
-            headers: getApiHeaders(),
-            credentials: "same-origin",
-        });
+    console.log(
+        portalUser.isAdminRole
+            ? "[CabeceraImputaciones] URL cabeceras admin:"
+            : "[CabeceraImputaciones] URL cabeceras usuario:",
+        headersUrl
+    );
 
-        console.log("[CabeceraImputaciones] Respuesta cabeceras admin:", {
-            ok: headersResponse.ok,
-            status: headersResponse.status,
-            statusText: headersResponse.statusText,
-        });
-
-        if (!headersResponse.ok) {
-            const errorText = await headersResponse.text().catch(() => "");
-            console.error("[CabeceraImputaciones] Error HTTP cargando cabeceras admin:", errorText);
-            throw new Error(errorText || "No se pudieron cargar todas las cabeceras.");
-        }
-
-        const headersData = await headersResponse.json();
-        console.log("[CabeceraImputaciones] Payload cabeceras admin:", headersData);
-        const headerRows = Array.isArray(headersData?.value) ? headersData.value : [];
-        const allRecords = headerRows
-            .map((record) => mapCabeceraRecord(record, portalUser))
-            .filter((record) => !!record?.id)
-            .sort((leftRecord, rightRecord) => getDateSortValue(rightRecord.fechaInicio) - getDateSortValue(leftRecord.fechaInicio));
-
-        console.log("[CabeceraImputaciones] Numero de cabeceras admin renderizables:", allRecords.length);
-        return allRecords;
-    }
-
-    // Añadimos $top=100 para asegurar que traiga suficientes líneas diarias
-    const diarioUrl = `/_api/exc_diarioimputacions?$select=_exc_cr774_registro_value&$filter=_exc_contact_value eq '${portalUser.contactId}'&$top=100`;
-    console.log("[CabeceraImputaciones] URL diario:", diarioUrl);
-
-    const diarioResponse = await fetch(diarioUrl, {
+    const headersResponse = await fetch(headersUrl, {
         method: "GET",
-        headers: getApiHeaders(),
+        headers: {
+            ...getApiHeaders(),
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+        cache: "no-store",
         credentials: "same-origin",
     });
 
-    console.log("[CabeceraImputaciones] Respuesta diario:", {
-        ok: diarioResponse.ok,
-        status: diarioResponse.status,
-        statusText: diarioResponse.statusText,
-    });
-
-    if (!diarioResponse.ok) {
-        const errorText = await diarioResponse.text().catch(() => "");
-        console.error("[CabeceraImputaciones] Error HTTP cargando diarios:", errorText);
-        throw new Error(errorText || "No se pudieron cargar las imputaciones diarias del usuario.");
-    }
-
-    const diarioData = await diarioResponse.json();
-    console.log("[CabeceraImputaciones] Payload diario:", diarioData);
-    const diarioRows = Array.isArray(diarioData?.value) ? diarioData.value : [];
-    console.log("[CabeceraImputaciones] Numero de diarios recuperados:", diarioRows.length);
-
-    const cabeceraIds = buildCabeceraIds(diarioRows);
-    console.log("[CabeceraImputaciones] Cabeceras detectadas desde diarios:", cabeceraIds);
-
-    if (!cabeceraIds.length) {
-        console.warn("[CabeceraImputaciones] No se encontraron cabeceras asociadas al usuario.");
-        return [];
-    }
-
-    const detailResults = await Promise.allSettled(
-        cabeceraIds.map((cabeceraId) => fetchCabeceraDetail(cabeceraId, portalUser))
+    console.log(
+        portalUser.isAdminRole
+            ? "[CabeceraImputaciones] Respuesta cabeceras admin:"
+            : "[CabeceraImputaciones] Respuesta cabeceras usuario:",
+        {
+            ok: headersResponse.ok,
+            status: headersResponse.status,
+            statusText: headersResponse.statusText,
+        }
     );
 
-    detailResults.forEach((result, index) => {
-        if (result.status === "rejected") {
-            console.error(`[CabeceraImputaciones] Error cargando la cabecera ${cabeceraIds[index]}:`, result.reason);
-        } else {
-            console.log(`[CabeceraImputaciones] Cabecera cargada correctamente ${cabeceraIds[index]}:`, result.value);
-        }
-    });
-
-    const successfulRecords = detailResults
-        .filter((result) => result.status === "fulfilled")
-        .map((result) => result.value)
-        .sort((leftRecord, rightRecord) => getDateSortValue(rightRecord.fechaInicio) - getDateSortValue(leftRecord.fechaInicio));
-
-    console.log("[CabeceraImputaciones] Numero de cabeceras renderizables:", successfulRecords.length);
-
-    if (successfulRecords.length > 0) {
-        return successfulRecords;
+    if (!headersResponse.ok) {
+        const errorText = await headersResponse.text().catch(() => "");
+        console.error(
+            portalUser.isAdminRole
+                ? "[CabeceraImputaciones] Error HTTP cargando cabeceras admin:"
+                : "[CabeceraImputaciones] Error HTTP cargando cabeceras usuario:",
+            errorText
+        );
+        throw new Error(errorText || "No se pudieron cargar las cabeceras.");
     }
 
-    const firstRejected = detailResults.find((result) => result.status === "rejected");
-    throw firstRejected?.reason || new Error("No se pudieron cargar las cabeceras del usuario.");
+    const headersData = await headersResponse.json();
+    console.log(
+        portalUser.isAdminRole
+            ? "[CabeceraImputaciones] Payload cabeceras admin:"
+            : "[CabeceraImputaciones] Payload cabeceras usuario:",
+        headersData
+    );
+
+    const headerRows = Array.isArray(headersData?.value) ? headersData.value : [];
+    const allRecords = headerRows
+        .map((record) => mapCabeceraRecord(record, portalUser))
+        .filter((record) => !!record?.id)
+        .sort((leftRecord, rightRecord) => getDateSortValue(rightRecord.fechaInicio) - getDateSortValue(leftRecord.fechaInicio));
+
+    console.log(
+        portalUser.isAdminRole
+            ? "[CabeceraImputaciones] Numero de cabeceras admin renderizables:"
+            : "[CabeceraImputaciones] Numero de cabeceras usuario renderizables:",
+        allRecords.length
+    );
+
+    if (!portalUser.isAdminRole) {
+        console.log("[CabeceraImputaciones] Cabeceras recuperadas directamente por contacto:", allRecords);
+    }
+
+    return allRecords;
 }
 
 /**
@@ -851,7 +823,8 @@ async function deleteHeaderWithChildren(recordId) {
  *
  * @returns {Promise<void>}
  */
-async function loadRecords() {
+async function loadRecords(options = {}) {
+    const preservePage = options?.preservePage === true;
     isLoading = true;
     loadErrorMessage = "";
     console.log("[CabeceraImputaciones] Comienza loadRecords.");
@@ -860,7 +833,9 @@ async function loadRecords() {
 
     try {
         records = await fetchCabecerasForCurrentUser();
-        paginationState.currentPage = 1;
+        if (!preservePage) {
+            paginationState.currentPage = 1;
+        }
         console.log("[CabeceraImputaciones] Registros cargados en memoria:", records);
     } catch (error) {
         records = [];
@@ -872,6 +847,19 @@ async function loadRecords() {
         console.log("[CabeceraImputaciones] Fin de loadRecords. Total final:", records.length);
         renderTable();
     }
+}
+
+function requestAutoRefresh(reason) {
+    const now = Date.now();
+    if (document.visibilityState === "hidden") return;
+    if (isLoading || isDeletingRecord || isNavigatingToCopy) return;
+    if ((now - lastAutoRefreshAt) < 1500) return;
+
+    lastAutoRefreshAt = now;
+    console.log("[CabeceraImputaciones] Auto-refresh al recuperar contexto:", { reason });
+    loadRecords({ preservePage: true }).catch((error) => {
+        console.error("[CabeceraImputaciones] Error en auto-refresh:", error);
+    });
 }
 
 /* ===================== actions.js ===================== */
@@ -928,7 +916,6 @@ function getFilteredRecords() {
     return records.filter((record) => {
         const searchIndex = normalizeText([
             record.contacto,
-            record.estadoAprobacion,
             record.fechaInicio,
             record.fechaFin,
             String(record.totalHoras ?? ""),
@@ -1136,28 +1123,6 @@ function openDeleteDialog(recordId) {
     }
 }
 
-async function getCabecerasImputacion() {
-
-    const portalUser = getPortalUserContext();
-    if (!portalUser.contactId) {
-        throw new Error("No se pudo identificar el usuario logeado.");
-    }
-    const url =
-        `/_api/cr774_registros` +
-        `?$filter=_cr774_contact_value eq ${portalUser.contactId}` +
-        `&$top=50`;
-
-    console.log("[CabeceraImputaciones] Validando cabecera en semana actual:", url);
-
-    const response = await fetch(url, {
-        method: "GET",
-        headers: getApiHeaders(),
-        credentials: "same-origin",
-    });
-
-    console.log(response, "CABECERAS")
-}
-getCabecerasImputacion()
 /**
  * Comprueba si el usuario actual ya tiene una cabecera creada para la semana actual.
  *
@@ -1301,11 +1266,10 @@ function hideCopyDialog() {
 function downloadCsv() {
     const visibleRecords = getVisibleRecords();
     const rows = [
-        ["Fecha Inicio", "Fecha Fin", "Estado", "Contacto", "Total Horas"],
+        ["Fecha Inicio", "Fecha Fin", "Contacto", "Total Horas"],
         ...visibleRecords.map((record) => [
             formatDateDisplay(record.fechaInicio),
             formatDateDisplay(record.fechaFin),
-            record.estadoAprobacion,
             record.contacto,
             formatHourDisplay(record.totalHoras),
         ]),
@@ -1553,7 +1517,7 @@ function renderActionButtons(record) {
 function renderEmptyState() {
     return `
     <tr class="align-middle">
-        <td colspan="6" class="p-4 text-center">
+        <td colspan="5" class="p-4 text-center">
             <p class="small text-secondary fst-italic mb-0">No hay registros para mostrar.</p>
         </td>
     </tr>
@@ -1568,7 +1532,7 @@ function renderEmptyState() {
 function renderLoadingState() {
     return `
     <tr class="align-middle">
-        <td colspan="6" class="p-4 text-center">
+        <td colspan="5" class="p-4 text-center">
             <div class="d-flex justify-content-center align-items-center gap-2">
                 <div class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></div>
                 <span class="small text-secondary">Cargando cabeceras...</span>
@@ -1587,7 +1551,7 @@ function renderLoadingState() {
 function renderFeedbackState(message) {
     return `
     <tr class="align-middle">
-        <td colspan="6" class="p-4 text-center">
+        <td colspan="5" class="p-4 text-center">
             <p class="small text-secondary fst-italic mb-0">${escapeHtml(message)}</p>
         </td>
     </tr>
@@ -1612,11 +1576,6 @@ function renderTableRow(record) {
      <!-- FECHA FIN -->
         <td class="p-3">
             <p class="small text-dark mb-0 text-center">${escapeHtml(formatDateDisplay(record.fechaFin))}</p>
-        </td>
-
-     <!-- ESTADO APROBACION -->
-        <td class="p-3">
-            <p class="small text-dark mb-0 text-center">${escapeHtml(record.estadoAprobacion || "Sin estado")}</p>
         </td>
 
      <!-- CONTACTO -->
@@ -1798,6 +1757,14 @@ function initEventListeners() {
     });
     dom.copyDialogElement?.querySelectorAll('[data-copy-dismiss="modal"]').forEach((button) => {
         button.addEventListener("click", handleCopyDialogDismiss);
+    });
+
+    window.addEventListener("focus", () => requestAutoRefresh("window-focus"));
+    window.addEventListener("pageshow", () => requestAutoRefresh("pageshow"));
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+            requestAutoRefresh("visibilitychange");
+        }
     });
 }
 
